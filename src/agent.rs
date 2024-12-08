@@ -77,11 +77,19 @@ fn get_name() -> String {
 static PORT: AtomicU16 = AtomicU16::new(12500);
 
 pub async fn run_container(conf: MallocConf, seconds: u64) -> Option<usize> {
-    run_container_with_conf_string(&conf.to_string(), seconds).await
+    run_container_with_conf_string(&conf.to_string(), seconds, true).await
 }
 
-pub async fn run_container_with_conf_string(conf: &str, seconds: u64) -> Option<usize> {
-    let conf = format!("MALLOC_CONF={conf}");
+pub async fn run_container_with_conf_string(
+    conf: &str,
+    seconds: u64,
+    payloads: bool,
+) -> Option<usize> {
+    let conf = if conf == "" {
+        String::new()
+    } else {
+        format!("MALLOC_CONF={conf}")
+    };
     let docker = Docker::connect_with_socket_defaults().unwrap();
     let name = get_name();
 
@@ -92,17 +100,17 @@ pub async fn run_container_with_conf_string(conf: &str, seconds: u64) -> Option<
     }
 
     let mut env = vec![
-                    "DD_SITE=datad0g.com",
-                    "DD_API_KEY=45859e0d4eee0b3216b21cfd91282867",
-                    "DD_DOGSTATSD_NON_LOCAL_TRAFFIC=true",
-                    "DD_SERIALIZER_COMPRESSOR_KIND=zstd",
-                    "DD_SERIALIZER_ZSTD_COMPRESSOR_LEVEL=5",
-                    "DD_HOSTNAME=groovermoover",
-                ];
+        "DD_SITE=datad0g.com",
+        "DD_API_KEY=45859e0d4eee0b3216b21cfd91282867",
+        "DD_DOGSTATSD_NON_LOCAL_TRAFFIC=true",
+        "DD_SERIALIZER_COMPRESSOR_KIND=zstd",
+        "DD_SERIALIZER_ZSTD_COMPRESSOR_LEVEL=5",
+        "DD_HOSTNAME=groovermoover",
+    ];
 
     if conf != "" {
-	env.push(r#"LD_PRELOAD=/opt/lib/nosys.so:/opt/datadog-agent/embedded/lib/libjemalloc.so"#);
-	env.push(&conf);
+        env.push(r#"LD_PRELOAD=/opt/lib/nosys.so:/opt/datadog-agent/embedded/lib/libjemalloc.so"#);
+        env.push(&conf);
     }
 
     docker
@@ -115,13 +123,15 @@ pub async fn run_container_with_conf_string(conf: &str, seconds: u64) -> Option<
                 hostname: Some("zogglebork"),
                 image: Some("datadog/agent-dev:nightly-main-8ea4e935-py3"),
                 exposed_ports: Some({
-                   let mut ports = HashMap::new();
+                    let mut ports = HashMap::new();
                     ports.insert("8125/udp", HashMap::new());
                     ports
                 }),
                 host_config: Some(HostConfig {
                     network_mode: Some("bridge".to_string()),
-		    binds: Some(vec!["/var/run/docker.sock:/var/run/docker.sock:ro".to_string()]),
+                    binds: Some(vec![
+                        "/var/run/docker.sock:/var/run/docker.sock:ro".to_string()
+                    ]),
                     port_bindings: Some({
                         let mut bindings = HashMap::new();
                         bindings.insert(
@@ -151,7 +161,11 @@ pub async fn run_container_with_conf_string(conf: &str, seconds: u64) -> Option<
 
     println!("Container {name} port {port} running with {:?}", conf);
 
-    dogstatsd::spam(port, Duration::from_secs(seconds)).await;
+    if payloads {
+        dogstatsd::spam(port, Duration::from_secs(seconds)).await;
+    } else {
+        tokio::time::sleep(Duration::from_secs(seconds)).await;
+    }
 
     let memory = get_memory(&docker, &name).await;
 

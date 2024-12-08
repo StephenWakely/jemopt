@@ -31,6 +31,10 @@ enum Commands {
         /// Time in seconds to run for
         #[arg(short, long, default_value_t = RUN_FOR_SECONDS)]
         seconds: u64,
+
+	/// Send payloads via dogstatsd while running
+        #[arg(short, long)]
+	payloads: bool
     },
 }
 
@@ -40,14 +44,14 @@ fn main() {
     match cli.command {
         Commands::Evolve => evolution(),
         Commands::Interpret { genes } => interpret(genes),
-        Commands::Run { jemalloc, seconds } => run(&jemalloc, seconds),
+        Commands::Run { jemalloc, seconds, payloads } => run(&jemalloc, seconds, payloads),
     }
 }
 
-fn run(conf: &str, seconds: u64) {
+fn run(conf: &str, seconds: u64, payloads: bool) {
     match tokio::runtime::Runtime::new()
             .unwrap()
-        .block_on(agent::run_container_with_conf_string(conf, seconds)) {
+        .block_on(agent::run_container_with_conf_string(conf, seconds, payloads)) {
             Some(rss) => println!("RSS: {rss}"),
             None => println!("Duff run"),
         }
