@@ -15,7 +15,19 @@ struct Args {
 #[derive(Subcommand)]
 enum Commands {
     /// Run the GA.
-    Evolve,
+    Evolve {
+        /// Time in seconds to run for
+        #[arg(short, long, default_value_t = RUN_FOR_SECONDS)]
+        seconds: u64,
+
+        /// Send payloads via dogstatsd while running
+        #[arg(short, long)]
+        payloads: bool,
+
+        /// The config file to use
+        #[arg(short, long)]
+        config: Option<String>,
+    },
     /// Interpret the gene results from the evolution.
     Interpret {
         /// genes in CSV
@@ -32,9 +44,13 @@ enum Commands {
         #[arg(short, long, default_value_t = RUN_FOR_SECONDS)]
         seconds: u64,
 
-	/// Send payloads via dogstatsd while running
+        /// Send payloads via dogstatsd while running
         #[arg(short, long)]
-	payloads: bool
+        payloads: bool,
+
+        /// The config file to use
+        #[arg(short, long)]
+        config: Option<String>,
     },
 }
 
@@ -42,19 +58,33 @@ fn main() {
     let cli = Args::parse();
 
     match cli.command {
-        Commands::Evolve => evolution(),
+        Commands::Evolve {
+            seconds,
+            payloads,
+            config,
+        } => evolution(seconds, payloads, config),
         Commands::Interpret { genes } => interpret(genes),
-        Commands::Run { jemalloc, seconds, payloads } => run(&jemalloc, seconds, payloads),
+        Commands::Run {
+            jemalloc,
+            seconds,
+            payloads,
+            config,
+        } => run(&jemalloc, seconds, payloads, config),
     }
 }
 
-fn run(conf: &str, seconds: u64, payloads: bool) {
+fn run(conf: &str, seconds: u64, payloads: bool, config: Option<String>) {
     match tokio::runtime::Runtime::new()
-            .unwrap()
-        .block_on(agent::run_container_with_conf_string(conf, seconds, payloads)) {
-            Some(rss) => println!("RSS: {rss}"),
-            None => println!("Duff run"),
-        }
+        .unwrap()
+        .block_on(agent::run_container_with_conf_string(
+            conf,
+            seconds,
+            payloads,
+            config.as_ref().map(|c| c.as_str()),
+        )) {
+        Some(rss) => println!("RSS: {rss:?}"),
+        None => println!("Duff run"),
+    }
 }
 
 /// Interpret the genes
@@ -70,7 +100,7 @@ fn interpret(genes: String) {
 
 /// Run the GA evolution to get the best options for jemalloc that
 /// result in the lowest memory usage.
-fn evolution() {
+fn evolution(seconds: u64, payloads: bool, config: Option<String>) {
     let genotype = ListGenotype::builder()
         .with_genes_size(7)
         .with_allele_list((0..20).collect())
@@ -81,7 +111,11 @@ fn evolution() {
         .with_genotype(genotype)
         .with_target_population_size(20)
         .with_max_stale_generations(50)
-        .with_fitness(MallocFitness)
+        .with_fitness(MallocFitness {
+            seconds,
+            payloads,
+            config,
+        })
         .with_par_fitness(true)
         .with_fitness_ordering(FitnessOrdering::Minimize)
         .with_target_fitness_score(0)
@@ -109,7 +143,11 @@ fn evolution() {
 }
 
 #[derive(Clone, Debug)]
-struct MallocFitness;
+struct MallocFitness {
+    seconds: u64,
+    payloads: bool,
+    config: Option<String>,
+}
 
 impl Fitness for MallocFitness {
     type Genotype = ListGenotype<usize>;
@@ -122,8 +160,13 @@ impl Fitness for MallocFitness {
         let conf = var_name;
         let rss = tokio::runtime::Runtime::new()
             .unwrap()
-            .block_on(agent::run_container(conf, RUN_FOR_SECONDS));
+            .block_on(agent::run_container(
+                conf,
+                self.seconds,
+                self.payloads,
+                self.config.as_ref().map(|s| s.as_str()),
+            ));
 
-        rss.map(|r| r as isize)
+        rss.map(|r| r.total() as isize)
     }
 }
